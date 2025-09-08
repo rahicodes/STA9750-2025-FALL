@@ -13,7 +13,7 @@ website:
     
 format:
   html:
-    theme: superhero
+    theme: lux
     toc: false
 
 editor:
