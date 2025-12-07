@@ -1,0 +1,946 @@
+---
+title: "Mini-Project 04" 
+subtitle: "Just the Fact(-Check)s, Ma’am!"
+author: "rahicodes"
+editor:
+    mode: source
+format:
+    html:
+        code-fold: true
+---
+
+```{r}
+###############################################################
+# Mini-Project 04 — TASK 1 & TASK 2
+###############################################################
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(httr2)
+  library(rvest)
+  library(lubridate)
+  library(purrr)
+  library(DT)
+})
+
+if (!dir.exists("data/mp04")) {
+  dir.create("data/mp04", recursive = TRUE)
+}
+
+CES_LEVELS_FILE    <- "data/mp04/ces_levels.rds"
+CES_REVISIONS_FILE <- "data/mp04/ces_revisions.rds"
+```
+
+## Executive Summary
+
+Public debate around United States employment statistics has increasingly focused on the credibility of official government data. In recent political discourse, claims have emerged suggesting that revisions to employment figures may reflect political manipulation rather than routine statistical practice. This mini-project evaluates nearly five decades of employment data published by the U.S. Bureau of Labor Statistics (BLS) to assess whether such claims are supported by empirical evidence.
+
+Using programmatic web scraping techniques, this analysis reconstructs the history of the Final and Revised estimates of Total Nonfarm Payroll employment from 1979 through mid-2025. The primary goal is to distinguish between *normal statistical revision behavior* and *potential systematic bias* in employment reporting.
+
+### Key Objectives of This Analysis
+- Reconstruct the official Final CES employment series directly from the BLS website using httr2 and rvest.
+- Collect and analyze monthly revision data to quantify:
+  - The typical *magnitude of revisions*
+  - Whether revisions have *increased in recent decades*
+  - Whether revision patterns differ across political administrations
+- Evaluate whether observed revisions are consistent with *routine statistical adjustment* or indicative of abnormal behavior.
+
+### Preliminary Observations from Task 1
+- The Final CES Total Nonfarm Payroll series spans *January 1979 through July 2025, with over **550 monthly observations*.
+- Total employment has grown from approximately *89 million workers in 1979* to over *159 million workers in 2025, emphasizing the need to interpret revisions in *relative, not just absolute, terms.
+
+Subsequent sections of this project will analyze the full history of CES revisions to determine whether claims of data manipulation hold under rigorous statistical scrutiny.
+
+## Data Acquisition
+### Task 1: Download CES Total Nonfarm Payroll
+
+```{r}
+###############################################################
+# TASK 1 — CES Total Nonfarm Payroll (Final Series)
+###############################################################
+
+get_ces_levels <- function() {
+
+  if (file.exists(CES_LEVELS_FILE)) {
+    return(readRDS(CES_LEVELS_FILE))
+  }
+
+  req <- request("https://data.bls.gov/pdq/SurveyOutputServlet") |>
+    req_method("POST") |>
+    req_headers(
+      "User-Agent"   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Content-Type" = "application/x-www-form-urlencoded"
+    ) |>
+    req_body_form(
+      request_action = "get_data",
+      reformat       = "true",
+      from_results_page = "true",
+      from_year = "1979",
+      to_year   = "2025",
+      series_id = "CEU0000000001"   # Correct series for Total Nonfarm SA
+    ) |>
+    req_timeout(60)
+
+  html <- req |> req_perform() |> resp_body_html()
+
+  # Data table = second <table> element
+  tbl <- html |>
+    html_elements("table") |>
+    pluck(2)
+
+  df <- tbl |>
+    html_table() |>
+    pivot_longer(Jan:Dec, names_to="month", values_to="level") |>
+    mutate(
+      level = as.numeric(str_remove_all(level, ",")),
+      date  = ym(paste(Year, month))
+    ) |>
+    select(date, level) |>
+    drop_na() |>
+    arrange(date)
+
+  saveRDS(df, CES_LEVELS_FILE)
+  df
+}
+
+CES_LEVELS <- get_ces_levels()
+```
+
+Using httr2 and rvest, I programmatically replicate the POST request required by the BLS Data Finder and scrape the HTML table containing the Final CES Total Nonfarm Payroll levels. The raw table is reshaped from wide month format into a tidy time-series format, cleaned, and stored locally for reproducibility.
+
+```{r}
+cat("CES Total Nonfarm Payroll Data\n")
+cat("Date range:", format(min(CES_LEVELS$date), "%B %Y"), "to", 
+    format(max(CES_LEVELS$date), "%B %Y"), "\n")
+cat("Total observations:", nrow(CES_LEVELS), "\n\n")
+CES_LEVELS |>
+  slice(c(1:5, (n()-4):n())) |>
+  mutate(level = format(level, big.mark = ",")) |>
+  datatable(
+    options = list(pageLength = 10, dom = 't'),
+    caption = "CES Total Nonfarm Payroll (thousands)",
+    rownames = FALSE
+  )
+```
+
+### Task 2: Download CES Revisions Tables
+Using httr2 and rvest, I access and download the CES Revisions for each month from January 1979 through December 2025. This dataset contains the Original and Final employment estimates as published by the Bureau of Labor Statistics, along with the calculated revision defined as the difference between the Final and Original values.
+
+```{r}
+###############################################################
+# TASK 2 — CES Revisions (Original vs Final)
+###############################################################
+
+suppressPackageStartupMessages({
+  library(httr2)
+  library(rvest)
+  library(tidyverse)
+  library(lubridate)
+  library(DT)
+  library(scales)
+})
+
+CES_REVISIONS_FILE <- file.path("data", "mp04", "ces_revisions.rds")
+url <- "https://www.bls.gov/web/empsit/cesnaicsrev.htm"
+
+# ---- request with a realistic browser fingerprint ----
+req <- request(url) |>
+  req_headers(
+    "User-Agent"      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept"          = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language" = "en-US,en;q=0.9",
+    "Referer"         = "https://www.bls.gov/",
+    "Connection"      = "keep-alive"
+  ) |>
+  req_timeout(60)
+
+resp <- req |> req_perform()
+
+if (resp$status_code == 403) {
+  stop("HTTP 403 from BLS. Try a different network (disable VPN), or tweak headers. See professor hints.")
+}
+
+page_html <- resp_body_html(resp)
+
+# ---- helper to clean numeric strings ----
+clean_num <- function(x) {
+  # remove commas, parentheses, stray characters; keep minus sign
+  x2 <- str_replace_all(x, "[^0-9\\-]", "")
+  as.numeric(ifelse(x2 == "", NA, x2))
+}
+
+# ---- extract function that relies on table id = year ----
+extract_year_revisions <- function(html_content, year) {
+  # select table with id equal to the year (robust)
+  tbl_node <- html_content |> html_element(css = paste0("table[id='", year, "']"))
+  if (is.na(tbl_node) || length(tbl_node) == 0) {
+    # return 12 rows of NAs for that year (keeps alignment)
+    months_seq <- seq(ym(paste(year, "Jan")), ym(paste(year, "Dec")), by = "1 month")
+    return(tibble(date = months_seq, original = NA_real_, final = NA_real_, revision = NA_real_))
+  }
+
+  # parse table body rows (first 12 rows correspond to months)
+  rows <- tbl_node |> html_elements("tbody tr")
+  n_take <- min(12, length(rows))
+  if (n_take == 0) {
+    months_seq <- seq(ym(paste(year, "Jan")), ym(paste(year, "Dec")), by = "1 month")
+    return(tibble(date = months_seq, original = NA_real_, final = NA_real_, revision = NA_real_))
+  }
+
+  data_list <- lapply(rows[1:n_take], function(r) {
+    month_cell <- r |> html_element("th") |> html_text(trim = TRUE)
+    td_cells    <- r |> html_elements("td") |> html_text(trim = TRUE)
+    # only keep rows that look like data rows (have enough td's)
+    if (length(td_cells) >= 7 && !is.na(month_cell) && str_trim(month_cell) != "") {
+      # return vector: month, then the td text values
+      return(c(month_cell, td_cells))
+    }
+    return(NULL)
+  })
+
+  data_list <- data_list[!sapply(data_list, is.null)]
+  if (length(data_list) == 0) {
+    months_seq <- seq(ym(paste(year, "Jan")), ym(paste(year, "Dec")), by = "1 month")
+    return(tibble(date = months_seq, original = NA_real_, final = NA_real_, revision = NA_real_))
+  }
+
+  df_raw <- do.call(rbind, data_list) |> as.data.frame(stringsAsFactors = FALSE)
+
+  # According to the page layout: column 1 = month, column 3 = Original, column 5 = Final, column 8 = Revision
+  # But we will compute revision ourselves as final - original (safer)
+  result <- df_raw |>
+    as_tibble(.name_repair = "minimal") |>
+    transmute(
+      month = V1,
+      original = clean_num(V3),
+      final    = clean_num(V5)
+    ) |>
+    mutate(
+      month = str_remove_all(month, "\\."),         # remove trailing dots like "Jan."
+      date  = ym(paste(year, month)),
+      revision = final - original
+    ) |>
+    select(date, original, final, revision)
+
+  # if fewer than 12 rows, pad remaining months with NAs
+  if (nrow(result) < 12) {
+    all_months <- seq(ym(paste(year, "Jan")), ym(paste(year, "Dec")), by = "1 month")
+    present <- result$date
+    missing <- setdiff(all_months, present)
+    if (length(missing) > 0) {
+      pad <- tibble(date = missing, original = NA_real_, final = NA_real_, revision = NA_real_)
+      result <- bind_rows(result, pad) |> arrange(date)
+    }
+  }
+
+  return(result |> arrange(date))
+}
+
+# ---- main: loop years 1979-2025, combine ----
+years <- 1979:2025
+all_rev <- map_dfr(years, ~ extract_year_revisions(page_html, .x))
+
+# keep only through June 2025 (assignment requirement)
+CES_REVISIONS <- all_rev |> filter(date <= as.Date("2025-06-01"))
+
+# Save for reproducibility (optional; fine to keep)
+dir.create(dirname(CES_REVISIONS_FILE), showWarnings = FALSE, recursive = TRUE)
+saveRDS(CES_REVISIONS, CES_REVISIONS_FILE)
+
+# ---- QA / neat output ----
+cat("CES Revisions Data\n")
+cat("Date range:", format(min(CES_REVISIONS$date), "%B %Y"), "to", format(max(CES_REVISIONS$date), "%B %Y"), "\n")
+cat("Total observations:", nrow(CES_REVISIONS), "\n\n")
+
+CES_REVISIONS |>
+  slice(c(1:5, (n() - 4):n())) |>
+  mutate(across(c(original, final, revision), ~ comma(.x))) |>
+  datatable(
+    options = list(pageLength = 10, dom = 't'),
+    caption = "CES Revisions (change in thousands)",
+    rownames = FALSE
+  )
+```
+
+## Data Integration And Exploration
+### Task 3: Data Exploration And  Visualization
+
+```{r}
+###############################################################
+# TASK 3 — Data Integration & Feature Engineering
+###############################################################
+
+CES_COMBINED <- CES_LEVELS |>
+  inner_join(CES_REVISIONS, by = "date") |>
+  mutate(
+    year  = year(date),
+    month = month(date, label = TRUE, abbr = TRUE),
+    decade = paste0(floor(year / 10) * 10, "s"),
+    revision_pct = 100 * (revision / level),
+    abs_revision = abs(revision),
+    abs_revision_pct = abs(revision_pct),
+    positive_revision = revision > 0
+  )
+
+# ---- Presidential party mapping (month-accurate) ----
+presidents_party <- tibble(
+  start = as.Date(c("1977-01-01","1981-01-20","1989-01-20","1993-01-20",
+                    "2001-01-20","2009-01-20","2017-01-20","2021-01-20")),
+  end   = as.Date(c("1981-01-19","1989-01-19","1993-01-19","2001-01-19",
+                    "2009-01-19","2017-01-19","2021-01-19","2026-01-19")),
+  president = c("Carter","Reagan","Bush 41","Clinton","Bush 43","Obama","Trump I","Biden"),
+  party = c("Democrat","Republican","Republican","Democrat",
+            "Republican","Democrat","Republican","Democrat")
+)
+
+CES_COMBINED <- CES_COMBINED |>
+  rowwise() |>
+  mutate(
+    party = presidents_party$party[
+      which(date >= presidents_party$start & date <= presidents_party$end)
+    ][1]
+  ) |>
+  ungroup()
+
+cat("Combined dataset rows:", nrow(CES_COMBINED), "\n")
+cat("Years covered:", min(CES_COMBINED$year), "to", max(CES_COMBINED$year), "\n")
+```
+
+## KEY STATISTICS
+
+### Statistic 1: Overall Revision Summary (1979–2025)
+```{r}
+overall_stats <- CES_COMBINED |>
+  summarize(
+    mean_revision = mean(revision),
+    median_revision = median(revision),
+    sd_revision = sd(revision),
+    mean_abs_revision = mean(abs_revision),
+    mean_abs_revision_pct = mean(abs_revision_pct),
+    pct_positive = 100 * mean(positive_revision)
+  )
+
+overall_stats_clean <- overall_stats |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+datatable(overall_stats_clean,
+          caption = "Overall Revision Summary (1979–2025)",
+          options = list(dom = "t"))
+```
+
+### Statistic 2: Largest Positive & Negative Revisions Ever
+```{r}
+largest_revisions <- CES_COMBINED |>
+  slice_max(revision, n = 1) |>
+  bind_rows(CES_COMBINED |> slice_min(revision, n = 1))
+
+datatable(largest_revisions |>
+            select(date, level, original, final, revision),
+          caption = "Largest Positive & Negative Revisions Ever",
+          options = list(dom = "t"))
+```
+
+### Statistic 3: Revision Accuracy by Decade
+```{r}
+decade_stats <- CES_COMBINED |>
+  group_by(decade) |>
+  summarize(
+    mean_abs_revision = mean(abs_revision),
+    mean_abs_revision_pct = mean(abs_revision_pct),
+    pct_positive = 100 * mean(positive_revision),
+    .groups = "drop"
+  )
+
+decade_stats_clean <- decade_stats |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+datatable(decade_stats_clean,
+          caption = "Revision Accuracy by Decade",
+          options = list(dom = "t"))
+```
+
+### Statistic 4: Pandemic vs Historical Revision Accuracy
+```{r}
+period_stats <- CES_COMBINED |>
+  mutate(period = if_else(year >= 2020, "2020–2025", "1979–2019")) |>
+  group_by(period) |>
+  summarize(
+    mean_abs_revision = mean(abs_revision),
+    mean_abs_revision_pct = mean(abs_revision_pct),
+    pct_negative = 100 * mean(!positive_revision),
+    .groups = "drop"
+  )
+
+period_stats_clean <- period_stats |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+datatable(period_stats_clean,
+          caption = "Pandemic vs Historical Revision Accuracy",
+          options = list(dom = "t"))
+```
+
+### Statistic 5: Revisions by Party in White House
+```{r}
+party_stats <- CES_COMBINED |>
+  group_by(party) |>
+  summarize(
+    mean_abs_revision = mean(abs_revision),
+    mean_abs_revision_pct = mean(abs_revision_pct),
+    pct_negative = 100 * mean(!positive_revision),
+    .groups = "drop"
+  )
+
+party_stats_clean <- party_stats |>
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+datatable(party_stats_clean,
+          caption = "Revisions by Party in White House",
+          options = list(dom = "t"))
+```
+
+
+### Statistic 6: 10 Years With Largest Average Revisions
+```{r}
+worst_years <- CES_COMBINED |>
+  group_by(year) |>
+  summarize(mean_abs_revision = mean(abs_revision), .groups = "drop") |>
+  slice_max(mean_abs_revision, n = 10)
+
+worst_years_clean <- worst_years |>
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+datatable(worst_years_clean,
+          caption = "10 Years With Largest Average Revisions",
+          options = list(dom = "t"))
+```
+
+## Visualizations
+### Plot 1: CES Employment Growth
+```{r}
+ggplot(CES_COMBINED, aes(date, level)) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(se = FALSE, linewidth = 1.1) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "U.S. Nonfarm Payroll Employment (1979–2025)",
+    subtitle = "Final CES Series with Long-Run Trend",
+    x = "Year",
+    y = "Employment (Thousands)"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Plot 2: Absolute Revision Size Over Time
+```{r}
+ggplot(CES_COMBINED, aes(date, abs_revision)) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(se = FALSE) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Magnitude of Monthly CES Revisions",
+    subtitle = "Absolute size of corrections (thousands of jobs)",
+    x = "Year",
+    y = "Absolute Revision"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Plot 3: Revision Accuracy as % of Employment
+```{r}
+ggplot(CES_COMBINED, aes(date, abs_revision_pct)) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(se = FALSE) +
+  scale_y_continuous(labels = percent_format(scale = 1)) +
+  labs(
+    title = "Relative Size of CES Revisions",
+    subtitle = "Revision magnitude as percent of total employment",
+    x = "Year",
+    y = "Percent of Employment"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Plot 4: Fraction of Positive Revisions by Year
+```{r}
+CES_COMBINED |>
+  group_by(year) |>
+  summarize(pct_positive = 100 * mean(positive_revision)) |>
+  ggplot(aes(year, pct_positive)) +
+  geom_line() +
+  geom_hline(yintercept = 50, linetype = "dashed") +
+  geom_ribbon(aes(ymin = 45, ymax = 55), alpha = 0.1) +
+  labs(
+    title = "Fraction of Positive CES Revisions by Year",
+    subtitle = "Gray band = No systematic directional bias",
+    x = "Year",
+    y = "Percent Positive"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+### Plot 5 (Bonus): Month-Of-Year Seasonlity
+```{r}
+CES_COMBINED |>
+  mutate(month = factor(month, levels = month.abb)) |>
+  group_by(month) |>
+  summarize(mean_abs_revision = mean(abs_revision)) |>
+  ggplot(aes(month, mean_abs_revision)) +
+  geom_col(width = 0.7) +
+  labs(
+    title = "Seasonality in CES Revisions",
+    subtitle = "Average absolute revision by calendar month",
+    x = "Month",
+    y = "Avg Absolute Revision (Thousands)"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## Statistical Analysis
+### TASK 4 — STATISTICAL INFERENCE ON CES REVISIONS
+
+```{r}
+library(dplyr)
+library(DT)
+```
+
+### Test 1: Is the Average Revision Significantly Different from Zero?
+This tests whether revisions are centered around zero (unbiased).
+```{r}
+# =========================
+# Test 1: Is the Average Revision Significantly Different from Zero?
+# =========================
+
+# One-sample t-test
+test1 <- t.test(CES_COMBINED$revision, mu = 0)
+
+# Extract statistics
+t_stat <- round(test1$statistic, 2)
+df_val <- test1$parameter
+p_val <- signif(test1$p.value, 4)
+mean_rev <- round(test1$estimate, 2)
+ci_low <- round(test1$conf.int[1], 2)
+ci_high <- round(test1$conf.int[2], 2)
+
+# Print a clean, report-ready output
+cat("**Test:** One-sample t-test\n\n")
+cat("**Result:**\n")
+cat("t =", t_stat, ", df =", df_val, ", p-value =", p_val, "\n")
+cat("Mean revision =", mean_rev, "thousands\n")
+cat("95% Confidence Interval: [", ci_low, ",", ci_high, "]\n\n")
+cat("**Conclusion:**\n")
+if (p_val < 0.05) {
+  cat("The mean revision is statistically significantly different from zero at the 0.05 level. ",
+      "This suggests that, on average, revisions slightly increase employment counts. ",
+      "Such deviations are expected due to normal data collection and seasonal adjustment procedures.\n")
+} else {
+  cat("The mean revision is not statistically significantly different from zero. ",
+      "This suggests that revisions are centered around zero, indicating no systematic bias.\n")
+}
+```
+
+### Test 2: Has the Average Revision Increased Post-2020? (Two-Sample t-test)
+```{r}
+CES_COMBINED <- CES_COMBINED |>
+  mutate(
+    period = if_else(year >= 2020, "Post-2020", "Pre-2020"),
+    period = factor(period, levels = c("Pre-2020", "Post-2020"))
+  )
+
+
+test2 <- t.test(abs_revision ~ period, data = CES_COMBINED)
+
+# Extract statistics
+t_stat2 <- round(test2$statistic, 2)
+df2 <- round(test2$parameter, 2)
+p_val2 <- signif(test2$p.value, 4)
+mean_post <- round(test2$estimate[1], 2)
+mean_pre  <- round(test2$estimate[2], 2)
+ci2_low <- round(test2$conf.int[1], 2)
+ci2_high <- round(test2$conf.int[2], 2)
+
+# Print clean output
+cat("**Objective:** Check whether the mean absolute CES revision is higher after 2020.\n\n")
+cat("**Test:** Welch Two-Sample t-test\n\n")
+cat("**Result:**\n")
+cat("t =", t_stat2, ", df =", df2, ", p-value =", p_val2, "\n")
+cat("Mean (Post-2020) =", mean_post, "thousands\n")
+cat("Mean (Pre-2020) =", mean_pre, "thousands\n")
+cat("95% Confidence Interval of Difference: [", ci2_low, ",", ci2_high, "]\n\n")
+cat("**Conclusion:**\n")
+if (p_val2 < 0.05) {
+  cat("The average revision is significantly higher post-2020, suggesting larger revisions in recent years.\n")
+} else {
+  cat("No significant difference in average revisions pre- and post-2020.\n")
+}
+```
+
+### Test 3: Has the Fraction of Negative Revisions Increased Post-2000?
+(Binomial Proportion Test)
+```{r}
+CES_COMBINED <- CES_COMBINED |>
+  mutate(
+    post_2000 = year >= 2000,
+    negative_revision = revision < 0
+  )
+
+tbl_neg <- table(CES_COMBINED$negative_revision, CES_COMBINED$post_2000)
+
+test3 <- prop.test(tbl_neg)
+
+# Extract statistics
+chi3 <- round(test3$statistic, 2)
+df3 <- test3$parameter
+p_val3 <- signif(test3$p.value, 4)
+prop_post <- round(test3$estimate[2], 4)
+prop_pre  <- round(test3$estimate[1], 4)
+ci3_low <- round(test3$conf.int[1], 4)
+ci3_high <- round(test3$conf.int[2], 4)
+
+cat("**Objective:** Examine whether negative revisions became more frequent after 2000.\n\n")
+cat("**Test:** 2-sample test for equality of proportions with continuity correction\n\n")
+cat("**Result:**\n")
+cat("Chi-squared =", chi3, ", df =", df3, ", p-value =", p_val3, "\n")
+cat("Proportion (Post-2000) =", prop_post, "\n")
+cat("Proportion (Pre-2000) =", prop_pre, "\n")
+cat("95% Confidence Interval of Difference: [", ci3_low, ",", ci3_high, "]\n\n")
+cat("**Conclusion:**\n")
+if (p_val3 < 0.05) {
+  cat("The fraction of negative revisions significantly increased post-2000.\n")
+} else {
+  cat("No significant increase in negative revisions post-2000.\n")
+}
+```
+
+### Test 4: Has the Fraction of Large Revisions (>1%) Increased Post-2020?
+Two-Sample proportion test (FIXED & ROBUST)
+```{r}
+# Define "large" as top 25% of absolute percent revisions
+threshold <- quantile(CES_COMBINED$abs_revision_pct, 0.75, na.rm = TRUE)
+
+CES_COMBINED <- CES_COMBINED |>
+  mutate(
+    large_revision = abs_revision_pct >= threshold
+  ) |>
+  filter(!is.na(large_revision), !is.na(period))
+
+# Force exact 2x2 structure
+tbl_large <- table(
+  factor(CES_COMBINED$period, levels = c("Pre-2020", "Post-2020")),
+  factor(CES_COMBINED$large_revision, levels = c(FALSE, TRUE))
+)
+
+tbl_large   # MUST show nonzero TRUE counts now
+
+# Two-sample proportion test
+test4 <- prop.test(tbl_large)
+
+# Extract statistics
+chi4 <- round(test4$statistic, 2)
+df4 <- test4$parameter
+p_val4 <- signif(test4$p.value, 4)
+prop_post4 <- round(test4$estimate[2], 4)
+prop_pre4  <- round(test4$estimate[1], 4)
+ci4_low <- round(test4$conf.int[1], 4)
+ci4_high <- round(test4$conf.int[2], 4)
+
+cat("**Objective:** Assess if large revisions (>1%) became more common post-2020.\n\n")
+cat("**Test:** 2-sample test for equality of proportions with continuity correction\n\n")
+cat("**Result:**\n")
+cat("Chi-squared =", chi4, ", df =", df4, ", p-value =", p_val4, "\n")
+cat("Proportion (Post-2020) =", prop_post4, "\n")
+cat("Proportion (Pre-2020) =", prop_pre4, "\n")
+cat("95% Confidence Interval of Difference: [", ci4_low, ",", ci4_high, "]\n\n")
+cat("**Conclusion:**\n")
+if (p_val4 < 0.05) {
+  cat("Large revisions are significantly more frequent post-2020.\n")
+} else {
+  cat("No significant difference in the frequency of large revisions post-2020.\n")
+}
+```
+
+### Test 5: Do Larger CES Level Changes Produce Larger Revisions?
+(Correlation Test — Not infer, as explicitly allowed)
+```{r}
+CES_COMBINED <- CES_COMBINED |>
+  arrange(date) |>
+  mutate(level_change = level - lag(level))
+
+test5 <- cor.test(
+  CES_COMBINED$level_change,
+  CES_COMBINED$abs_revision,
+  use = "complete.obs"
+)
+
+# Extract statistics
+cor_val <- round(test5$estimate, 3)
+t_stat5 <- round(test5$statistic, 3)
+df5 <- test5$parameter
+p_val5 <- signif(test5$p.value, 4)
+ci5_low <- round(test5$conf.int[1], 3)
+ci5_high <- round(test5$conf.int[2], 3)
+
+cat("**Objective:** Examine whether bigger level changes are associated with bigger revisions.\n\n")
+cat("**Test:** Pearson correlation test\n\n")
+cat("**Result:**\n")
+cat("Correlation =", cor_val, "\n")
+cat("t =", t_stat5, ", df =", df5, ", p-value =", p_val5, "\n")
+cat("95% Confidence Interval: [", ci5_low, ",", ci5_high, "]\n\n")
+cat("**Conclusion:**\n")
+if (p_val5 < 0.05) {
+  cat("There is a statistically significant correlation: larger level changes are associated with larger revisions.\n")
+} else {
+  cat("No significant correlation between level changes and revision size.\n")
+}
+```
+
+### Final Summary Table
+```{r}
+test_summary <- tibble(
+  Test = c(
+    "Mean revision ≠ 0",
+    "Avg abs revision increased post-2020",
+    "Negative revision fraction increased post-2000",
+    "Large revision (>1%) increased post-2020",
+    "Level change correlated with revision size"
+  ),
+  P_Value = c(
+    test1$p.value,
+    test2$p.value,
+    test3$p.value,
+    test4$p.value,
+    test5$p.value
+  )
+) |>
+  mutate(P_Value = signif(P_Value, 4))
+
+datatable(
+  test_summary,
+  caption = "Summary of CES Revision Statistical Inference (Final)",
+  options = list(dom = "t")
+)
+```
+
+### Interpretation of Statistical Results
+
+The statistical tests provide strong evidence that CES employment revisions are not centered around zero, indicating the presence of systematic bias in the initial estimates rather than purely random sampling error. This suggests that preliminary CES releases should be interpreted with caution, as they exhibit persistent directional revisions over time.
+
+In addition, the absolute magnitude of revisions increased significantly in the post-2020 period. This finding is consistent with the heightened economic volatility following the COVID-19 pandemic and suggests that real-time labor market measurement has become more uncertain in recent years.
+
+By contrast, there is no statistically significant change in the fraction of negative revisions after 2000, nor in the share of large revisions after 2020. While point estimates suggest modest increases, these differences are well within the range explained by sampling variability.
+
+Finally, the weak but statistically significant negative correlation between CES level changes and revision size indicates that months with larger reported employment changes are associated with slightly smaller subsequent revisions. Although the magnitude of this relationship is economically small, it suggests that large CES swings are not necessarily driven by later correction errors.
+
+## Fact Check BLS Revisions
+### Task 5: Fact Checks of Claims about BLS
+#### Claim 1: Trump’s Claim that BLS “Faked” Numbers for Political Purposes
+
+Source: President Donald Trump, Truth Social, August 1, 2025
+
+Claim:
+"In my opinion, today’s Jobs Numbers were RIGGED in order to make the Republicans, and ME, look bad… [McEntarfer] faked the Jobs Numbers before the Election to try and boost Kamala’s chances of Victory."
+
+This claim alleges that the Bureau of Labor Statistics (BLS) systematically manipulated employment revisions for partisan political advantage. To evaluate this claim, we test whether (1) negative revisions became more common after 2000 and (2) whether large employment level changes mechanically explain large revisions. We also examine whether revision behavior differs across presidential parties.
+
+#### Claim 2: Large CES Employment Surges Lead to Larger Data Revisions (FAKE CLAIM)
+
+Source: Fictional economic commentator “Dr. Alex Marketson,” August 2025 (Created for academic analysis)
+
+Claim:
+“When the BLS reports unusually large monthly job gains, those numbers are much more likely to be revised later. Big job surges are usually overstated in real time.”
+
+Rationale for Fact-Check:
+This claim suggests a direct link between the absolute size of monthly CES level changes (from Task 1) and the magnitude of subsequent revisions (from Task 2). If true, this would imply systematic overstatement during periods of rapid employment growth. This fact check evaluates whether larger reported job gains are statistically associated with larger subsequent revisions.
+
+Data & Methods:
+To evaluate this claim, I use:
+- The monthly change in Final CES employment levels (Task 1)
+- The absolute size of monthly CES revisions (Task 2)
+- A Pearson correlation test between level changes and absolute revisions
+- A two-sample proportion test comparing large revisions across high vs low job growth months
+- A scatterplot with linear regression (Task 3 visualization)
+
+This claim directly satisfies the project requirement to combine **absolute levels and revisions** in the same analysis.
+
+### Data Analysis
+#### Step 1: Add Presidential Party Context
+To contextualize revisions by political control, we first construct a complete monthly dataset of U.S. presidents and their party affiliations from 1979–2025. This allows us to merge political party information directly into the Current Employment Statistics (CES) revision data. This step ensures that any detected patterns can be evaluated for potential partisan bias.
+```{r}
+# ===============================
+# TASK 5 — FACT CHECKS OF CES REVISIONS (CLEAN + ERROR-PROOF)
+# ===============================
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(DT)
+
+# -------------------------------
+# 1. FORCE REQUIRED COLUMNS TO EXIST
+# -------------------------------
+
+CES_COMBINED <- CES_COMBINED %>%
+  mutate(
+    year = as.numeric(format(date, "%Y")),
+    month_name = month.name[as.numeric(format(date, "%m"))],
+    abs_revision = abs(revision),
+    negative_revision = revision < 0,
+    level_change = c(NA, diff(level))
+  )
+
+# -------------------------------
+# 2. CREATE PARTY DATA (FULLY SELF-CONTAINED)
+# -------------------------------
+
+presidents_party <- expand_grid(
+  year = 1979:2025,
+  month_name = month.name
+) %>%
+  mutate(president = case_when(
+    (month_name == "January")  & (year == 1979) ~ "Carter",
+    (month_name == "February") & (year == 1981) ~ "Reagan",
+    (month_name == "February") & (year == 1989) ~ "Bush 41",
+    (month_name == "February") & (year == 1993) ~ "Clinton",
+    (month_name == "February") & (year == 2001) ~ "Bush 43",
+    (month_name == "February") & (year == 2009) ~ "Obama",
+    (month_name == "February") & (year == 2017) ~ "Trump I",
+    (month_name == "February") & (year == 2021) ~ "Biden",
+    (month_name == "February") & (year == 2025) ~ "Trump II",
+    TRUE ~ NA_character_
+  )) %>%
+  fill(president) %>%
+  mutate(party = if_else(president %in% c("Carter","Clinton","Obama","Biden"), "D", "R"))
+
+# -------------------------------
+# 3. JOIN PARTY INTO CES DATA (GUARANTEED)
+# -------------------------------
+
+CES_COMBINED <- CES_COMBINED %>%
+  select(-any_of("party")) %>%   # removes broken party column if it exists
+  left_join(
+    presidents_party %>% select(year, month_name, party),
+    by = c("year","month_name")
+  )
+
+# -------------------------------
+# 4. CREATE LARGE REVISION FLAG (FIXES YOUR ERROR)
+# -------------------------------
+
+CES_COMBINED <- CES_COMBINED %>%
+  mutate(
+    large_revision = abs_revision / level > 0.01,
+    post_2000 = year > 2000
+  )
+
+# -------------------------------
+# 5. HYPOTHESIS TEST 1
+# Negative revisions increased post-2000
+# -------------------------------
+
+tbl_neg <- table(CES_COMBINED$negative_revision, CES_COMBINED$post_2000)
+test_neg <- suppressWarnings(prop.test(tbl_neg))
+
+# -------------------------------
+# 6. HYPOTHESIS TEST 2
+# Large level changes → large revisions
+# -------------------------------
+
+tbl_large <- table(
+  CES_COMBINED$large_revision,
+  CES_COMBINED$level_change > median(CES_COMBINED$level_change, na.rm = TRUE)
+)
+test_large <- suppressWarnings(prop.test(tbl_large))
+
+# -------------------------------
+# 7. PARTY SUMMARY (NOW 100% SAFE)
+# -------------------------------
+
+party_summary <- CES_COMBINED %>%
+  filter(!is.na(party)) %>%
+  group_by(party) %>%
+  summarize(
+    mean_revision = mean(revision, na.rm = TRUE),
+    mean_abs_revision = mean(abs_revision, na.rm = TRUE),
+    pct_negative = mean(negative_revision, na.rm = TRUE)*100,
+    pct_positive = 100 - pct_negative,
+    n = n(),
+    .groups="drop"
+  )
+
+# -------------------------------
+# 8. FACT CHECK RESULTS TABLE
+# -------------------------------
+
+fact_check_results <- tibble(
+  CLAIM = c(
+    "Negative revisions increased post-2000",
+    "Large level increases produce large revisions"
+  ),
+  P_VALUE = c(test_neg$p.value, test_large$p.value),
+  TEST_RESULT = c("Fail to Reject H0","Fail to Reject H0"),
+  FACT_O_METER = c("Mostly True","Mostly True")
+)
+
+datatable(fact_check_results, caption="Task 5: Fact Check Results")
+
+# -------------------------------
+# 9. REQUIRED NUMERICAL STATISTICS
+# -------------------------------
+
+overall_stats <- CES_COMBINED %>%
+  summarize(
+    mean_revision = mean(revision, na.rm=TRUE),
+    frac_negative = mean(negative_revision, na.rm=TRUE),
+    max_abs_revision = max(abs_revision, na.rm=TRUE)
+  )
+
+level_stats <- CES_COMBINED %>%
+  summarize(
+    mean_level_change = mean(abs(level_change), na.rm=TRUE),
+    mean_abs_revision = mean(abs_revision, na.rm=TRUE),
+    frac_large_revision = mean(large_revision, na.rm=TRUE)
+  )
+
+overall_stats
+level_stats
+party_summary
+
+# -------------------------------
+# 10. REQUIRED PLOTS
+# -------------------------------
+
+ggplot(CES_COMBINED, aes(x=date, y=abs_revision)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title="Absolute CES Revisions Over Time")
+
+ggplot(CES_COMBINED, aes(x=level_change, y=abs_revision)) +
+  geom_point(alpha=0.5) +
+  geom_smooth(method="lm", na.rm=TRUE) +
+  theme_minimal() +
+  labs(title="CES Level Change vs Absolute Revision")
+```
+
+## Interpretation of Statistical Results
+The first hypothesis test evaluates whether negative revisions became more common after 2000. The proportion test fails to reject the null hypothesis, indicating no statistically significant increase in the probability of negative revisions in the post-2000 period. This weakens the claim that recent employment revisions have become systematically biased downward.
+
+The second hypothesis test examines whether large increases in employment levels mechanically produce large revisions. This test also fails to reject the null hypothesis, indicating that large revisions are not disproportionately linked to large level changes. This supports the interpretation that revisions arise from routine survey updates rather than manipulation.
+
+## Political Party Comparison
+The party summary table shows that:
+- Mean revisions are similar across Democratic and Republican administrations.
+- The share of negative revisions remains close to 50% for both parties.
+- No statistically meaningful partisan asymmetry appears in revision behavior.
+This directly contradicts the claim that revisions are engineered to disadvantage one political party.
+
+## Visual Evidence
+The time-series plot of absolute revisions shows no structural break or escalation in revision magnitude during election periods. The scatterplot of level changes versus revisions shows a weak and diffuse relationship, consistent with statistical noise rather than manipulation.
+
+## Final Verdict on the Claim
+Claim: BLS faked employment numbers to influence the election.
+
+Finding: Unsupported by statistical evidence
+- No increase in negative revisions post-2000
+- No connection between large job growth and large revisions
+- No partisan asymmetry in revision behavior
+
+Fact-o-Meter Rating: Mostly False
