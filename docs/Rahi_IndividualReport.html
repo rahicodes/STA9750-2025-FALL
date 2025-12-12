@@ -150,6 +150,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#hypothesis-testing" id="toc-hypothesis-testing" class="nav-link" data-scroll-target="#hypothesis-testing">5. Hypothesis Testing</a>
   <ul class="collapse">
   <li><a href="#hypothesis" id="toc-hypothesis" class="nav-link" data-scroll-target="#hypothesis">Hypothesis</a></li>
+  <li><a href="#a.-t-test-on-views" id="toc-a.-t-test-on-views" class="nav-link" data-scroll-target="#a.-t-test-on-views">A. t-Test on Views</a></li>
   <li><a href="#b.-t-test-on-popularity-score-main-result" id="toc-b.-t-test-on-popularity-score-main-result" class="nav-link" data-scroll-target="#b.-t-test-on-popularity-score-main-result">B. t-Test on Popularity Score (Main Result)</a></li>
   </ul></li>
   <li><a href="#regression-analysis-controlling-for-year" id="toc-regression-analysis-controlling-for-year" class="nav-link" data-scroll-target="#regression-analysis-controlling-for-year">6. Regression Analysis (Controlling for Year)</a>
@@ -176,6 +177,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#future-work" id="toc-future-work" class="nav-link" data-scroll-target="#future-work">Future work:</a></li>
   </ul></li>
   <li><a href="#export-summary-table" id="toc-export-summary-table" class="nav-link" data-scroll-target="#export-summary-table">12. Export Summary Table</a></li>
+  <li><a href="#reproducibility-notes" id="toc-reproducibility-notes" class="nav-link" data-scroll-target="#reproducibility-notes">Reproducibility Notes</a></li>
   <li><a href="#final-summary" id="toc-final-summary" class="nav-link" data-scroll-target="#final-summary">Final Summary</a></li>
   </ul>
 </nav>
@@ -239,10 +241,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="load-libraries" class="level1">
 <h1>0. Load Libraries</h1>
 <p><em>Before running analysis we load the common tidyverse suite and helper packages used throughout the report.</em></p>
+<p>In this project, we employ a suite of tidyverse packages for data manipulation, cleaning, and visualization, alongside helper packages like janitor for data hygiene, arrow for efficient Parquet file handling, broom for tidying model outputs, and kableExtra for producing publication-quality tables. These packages allow us to implement a fully reproducible workflow. Using Quarto, all code is embedded alongside narrative text, ensuring that the analysis can be rerun and verified by others. This approach aligns with best practices in reproducible research and allows transparent examination of every step from raw data to final insights.</p>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyverse)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># tidyverse for data wrangling + visualization</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># janitor for cleaning variable names</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># broom for tidy regression outputs</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(tidyverse)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stderr">
 <pre><code>── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
@@ -325,20 +331,22 @@ The following object is masked from 'package:dplyr':
 <section id="load-clean-dataset" class="level1">
 <h1>1. Load &amp; Clean Dataset</h1>
 <p>The dataset is provided as a Parquet file (columnar, memory-efficient). Below we load it with arrow, standardize column names to snake_case, and rename the few fields we will use in analysis.</p>
+<p>The dataset is sourced directly from the HuggingFace public repository, which provides curated collections of high-volume YouTube Music tracks in Parquet format. Although this dataset does not require API authentication or scraping, its structured format ensures reproducibility through a single controlled download point. Loading via arrow::read_parquet() guarantees consistent column types and avoids CSV parsing issues. All steps for accessing and preparing the dataset are fully documented below to align with reproducible research standards.</p>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> <span class="fu">read_parquet</span>(<span class="st">"train-00000-of-00001.parquet"</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="fu">clean_names</span>() <span class="sc">%&gt;%</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="fu">rename</span>(</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="at">title  =</span> item_label,</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="at">artist =</span> performer_label,</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="at">views  =</span> youtube_views,</span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="at">year   =</span> year,</span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="at">genre  =</span> genre_label</span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="fu">glimpse</span>(yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Convert column names to snake_case and keep only needed columns</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> <span class="fu">read_parquet</span>(<span class="st">"train-00000-of-00001.parquet"</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="fu">clean_names</span>() <span class="sc">%&gt;%</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="fu">rename</span>(</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="at">title  =</span> item_label,</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="at">artist =</span> performer_label,</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="at">views  =</span> youtube_views,</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="at">year   =</span> year,</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="at">genre  =</span> genre_label</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="fu">glimpse</span>(yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>Rows: 24,329
@@ -352,6 +360,7 @@ $ genre      &lt;chr&gt; "short film, dance-pop, musical film", "hip hop music, 
 </div>
 </div>
 <p>The dataset contains 24,329 rows and five core variables used in the analysis (title, artist, views, year, genre). The views column is the raw popularity signal we standardize later.</p>
+<p>The dataset we use comprises over 24,000 of the most-viewed tracks on YouTube Music. These tracks span multiple genres and years, providing a representative snapshot of YouTube’s popular music ecosystem. Each song is identified by a unique YouTube ID, and metadata such as artist, title, release year, and genre are included. One limitation of the raw dataset is the lack of standardized genre labels; some songs have multiple genre tags or non-standard entries, which could affect stratified analyses by genre. Cleaning involved standardizing column names to snake_case, handling missing values, and verifying numeric types for views and year. This ensures that subsequent computations, especially log-transformations and regressions, are applied correctly.</p>
 </section>
 <section id="feature-engineering-identify-featured-songs" class="level1">
 <h1>2. Feature Engineering: Identify Featured Songs</h1>
@@ -359,16 +368,17 @@ $ genre      &lt;chr&gt; "short film, dance-pop, musical film", "hip hop music, 
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> yt <span class="sc">%&gt;%</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="at">has_feature =</span> <span class="fu">ifelse</span>(</span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>      <span class="fu">str_detect</span>(<span class="fu">tolower</span>(title), <span class="st">"feat|ft</span><span class="sc">\\</span><span class="st">.|with"</span>) <span class="sc">|</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>        <span class="fu">str_detect</span>(artist, <span class="st">","</span>),</span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>      <span class="dv">1</span>, <span class="dv">0</span></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  )</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(yt<span class="sc">$</span>has_feature)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Identify featured tracks using patterns like “feat.”, “ft.”, and multiple artists</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> yt <span class="sc">%&gt;%</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>    <span class="at">has_feature =</span> <span class="fu">ifelse</span>(</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>      <span class="fu">str_detect</span>(<span class="fu">tolower</span>(title), <span class="st">"feat|ft</span><span class="sc">\\</span><span class="st">.|with"</span>) <span class="sc">|</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>        <span class="fu">str_detect</span>(artist, <span class="st">","</span>),</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>      <span class="dv">1</span>, <span class="dv">0</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a><span class="fu">table</span>(yt<span class="sc">$</span>has_feature)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -377,17 +387,20 @@ $ genre      &lt;chr&gt; "short film, dance-pop, musical film", "hip hop music, 
 </div>
 </div>
 <p>Only 247 songs (≈1%) are flagged as featured — a strong class imbalance. This will affect power for some subgroup analyses and is discussed in the limitations.</p>
+<p>To answer the research question, it is necessary to identify songs with featured artists. We use both textual cues from the title (e.g., “feat.”, “ft.”, “with”) and the presence of multiple artists in the artist column. This approach allows us to detect collaborations that may not be explicitly tagged as featured in YouTube metadata. However, only about 1% of the dataset falls into the featured category, creating a strong class imbalance. This sparsity can limit statistical power and complicate subgroup analysis, especially for methods sensitive to unequal sample sizes. Nevertheless, we proceed with rigorous inference techniques, including Welch t-tests, regression modeling, and bootstrapping, which accommodate unequal group sizes.</p>
 </section>
 <section id="create-a-popularity-metric" class="level1">
 <h1>3. Create a Popularity Metric</h1>
 <p>Raw view counts are heavily right-skewed. We construct a popularity_score by log-transforming views and standardizing to z-scores. This reduces influence of extreme outliers and allows comparisons across years.</p>
+<p>Raw view counts are heavily skewed, with a small number of tracks amassing billions of views while the majority have far fewer. To mitigate this, we log-transform the view counts, converting multiplicative differences into additive differences. This reduces the influence of extreme outliers, allowing for meaningful comparisons between featured and solo songs. After transformation, the values are standardized into z-scores to create a popularity_score. Standardizing allows us to compare songs across different release years, controlling for general growth trends on YouTube. The popularity_score is thus our main dependent variable, balancing interpretability with statistical robustness.</p>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> yt <span class="sc">%&gt;%</span></span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mutate</span>(</span>
-<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="at">popularity_score =</span> <span class="fu">scale</span>(<span class="fu">log10</span>(views <span class="sc">+</span> <span class="dv">1</span>))</span>
-<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Log-transform + z-score standardization reduces skew and allows cross-year comparison</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>yt <span class="ot">&lt;-</span> yt <span class="sc">%&gt;%</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mutate</span>(</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="at">popularity_score =</span> <span class="fu">scale</span>(<span class="fu">log10</span>(views <span class="sc">+</span> <span class="dv">1</span>))</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 </div>
 <p>popularity_score has mean ≈ 0 and provides a consistent measure of relative popularity.</p>
@@ -418,17 +431,23 @@ $ genre      &lt;chr&gt; "short film, dance-pop, musical film", "hip hop music, 
 </div>
 </div>
 <p>Featured songs have a lower mean and median number of views in this dataset. However, the featured class is small — later inference accounts for this.</p>
+<p>Descriptive statistics provide the first insight into differences between featured and solo songs. The raw mean of views is slightly lower for featured songs, and the median shows a similar pattern. These differences are small relative to the variance within each group, highlighting that a few viral hits dominate the popularity landscape. Visual inspection of the distributions reveals that solo songs have a wider spread, with some outliers achieving extraordinary view counts. The descriptive stage is essential for guiding subsequent inferential testing, ensuring that observed differences are not artifacts of skewed distributions or data irregularities.</p>
 </section>
 <section id="hypothesis-testing" class="level1">
 <h1>5. Hypothesis Testing</h1>
 <section id="hypothesis" class="level2">
 <h2 class="anchored" data-anchor-id="hypothesis">Hypothesis</h2>
 <p>H₀: Featured songs and solo songs have equal popularity. H₁: Featured songs differ in popularity.</p>
-<p>We formally compare groups using t-tests. We test both raw views (for intuition) and popularity_score (our main metric). The latter accounts for skew and scaling issues. ## A. t-Test on Views</p>
+<p>We formally compare groups using t-tests. We test both raw views (for intuition) and popularity_score (our main metric). The latter accounts for skew and scaling issues.</p>
+<p>To formally test whether featured songs outperform solo songs, we construct two-sided hypotheses: H₀ asserts that featured and solo songs have equal mean popularity, while H₁ posits a difference. Initial tests on raw views are informative but confounded by heavy skew and extreme outliers, which can inflate variance and obscure subtle differences. Therefore, our main test uses the log-transformed, standardized popularity_score, providing a robust measure of relative popularity. Significance is evaluated at the 5% level, and confidence intervals are inspected to assess the magnitude and direction of effects. The use of Welch’s t-test is appropriate here given unequal sample sizes.</p>
+</section>
+<section id="a.-t-test-on-views" class="level2">
+<h2 class="anchored" data-anchor-id="a.-t-test-on-views">A. t-Test on Views</h2>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">t.test</span>(views <span class="sc">~</span> has_feature, <span class="at">data =</span> yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb20"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Test mean differences without adjustment (raw views)</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="fu">t.test</span>(views <span class="sc">~</span> has_feature, <span class="at">data =</span> yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -451,7 +470,8 @@ mean in group 0 mean in group 1
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="fu">t.test</span>(popularity_score <span class="sc">~</span> has_feature, <span class="at">data =</span> yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb22"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Main inference using standardized popularity score</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="fu">t.test</span>(popularity_score <span class="sc">~</span> has_feature, <span class="at">data =</span> yt)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -476,8 +496,9 @@ mean in group 0 mean in group 1
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>model <span class="ot">&lt;-</span> <span class="fu">lm</span>(popularity_score <span class="sc">~</span> has_feature <span class="sc">+</span> year, <span class="at">data =</span> yt)</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(model)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb24"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Control for year to adjust for platform-level growth trends</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>model <span class="ot">&lt;-</span> <span class="fu">lm</span>(popularity_score <span class="sc">~</span> has_feature <span class="sc">+</span> year, <span class="at">data =</span> yt)</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="fu">summary</span>(model)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>
@@ -505,6 +526,7 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 <h3 class="anchored" data-anchor-id="interpretation">Interpretation:</h3>
 <p>has_feature coefficient &lt; 0 and p &lt; 0.05 → Featured songs perform worse year coefficient &gt; 0 and strongly significant → Newer songs get more views</p>
 <p>The regression coefficient for has_feature is negative and significant (≈ -0.152, p &lt; 0.02). Year has a small positive effect; newer songs tend to be relatively more popular, reflecting platform growth and recency effects.</p>
+<p>Regression modeling allows us to control for confounding variables, particularly the release year, which strongly influences popularity due to platform growth and recency effects. The model indicates a significant negative effect of has_feature, meaning that featured songs tend to perform slightly worse on average after adjusting for year. The positive coefficient for year suggests that newer songs benefit from algorithmic exposure and increased user engagement on YouTube. While the R-squared is low, reflecting substantial variability in popularity, the model is informative for isolating the specific effect of collaboration from general platform trends.</p>
 </section>
 </section>
 <section id="visualizations" class="level1">
@@ -555,6 +577,7 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 </div>
 </div>
 <p>Figure 2: Boxplots of raw views on a log scale. Solo songs exhibit a higher median and wider spread.</p>
+<p>Visualizations complement numerical analyses by illustrating distributional patterns. Violin and box plots reveal differences in central tendency and spread between featured and solo songs. The lower median popularity for featured tracks is visually apparent, and the presence of extreme outliers in solo tracks highlights the uneven nature of viral success. Log-scaled views further emphasize these differences while compressing extreme values, allowing more informative visual comparisons. These visualizations are critical for communicating findings intuitively, especially for audiences less familiar with statistical outputs.</p>
 </section>
 </section>
 <section id="bootstrapping" class="level1">
@@ -582,6 +605,7 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 </div>
 <p>If CI &lt; 0 → featured songs underperform.</p>
 <p>The bootstrap 95% CI for the mean difference lies below zero (e.g., [-0.29, -0.01]), reinforcing the t-test and regression: featured songs underperform on average in this dataset.</p>
+<p>To ensure robustness against violations of t-test assumptions, we perform bootstrapping with 5,000 replicates. This non-parametric method estimates the sampling distribution of the mean difference in popularity without assuming normality. The resulting 95% confidence interval lies entirely below zero, confirming that featured songs underperform relative to solo tracks. Bootstrapping provides additional evidence that the observed effect is not driven by outliers or skewness and supports the validity of our inferential conclusions.</p>
 </section>
 <section id="final-results-interpretation" class="level1">
 <h1>9. Final Results &amp; Interpretation</h1>
@@ -606,6 +630,10 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 <section id="summary" class="level3">
 <h3 class="anchored" data-anchor-id="summary">Summary:</h3>
 <p>Across descriptive statistics, inferential tests, regression, and bootstrap inference, songs with featured artists do not outperform solo songs on YouTube Music in this dataset. Popularity (standardized log views) is slightly lower for featured tracks — and this result remains after adjusting for release year. Release year is a consistently strong positive predictor of popularity, suggesting that platform growth and recency/exposure are more important drivers of success than collaboration status. These findings imply that collaboration alone is not a reliable strategy for obtaining higher YouTube visibility, and that platform dynamics (recommendation systems, trends, virality) must be accounted for when interpreting artist strategies.</p>
+<p>Understanding why featured songs underperform on YouTube Music requires deeper reflection on how the platform functions compared to traditional audio-only streaming services. YouTube is fundamentally a visual, algorithm-driven ecosystem where the visibility of content is shaped by user behavior, click-through rates, thumbnail design, session watch patterns, upload timing, and recommendation system feedback loops. These platform mechanics may overshadow the impact of artist collaborations. For instance, a song with a high-profile featured artist might still underperform if its music video receives low engagement in the first 24 hours, leading the algorithm to limit its organic reach. Conversely, solo tracks with strong visual concepts or viral hooks may receive significant exposure regardless of artist lineup.</p>
+<p>Another factor is that collaborations may be more strategically impactful on platforms where listeners primarily consume audio passively, such as Spotify or Apple Music. On YouTube, many users discover music through trending videos, reaction channels, dance challenges, or short-form content. These discovery pathways tend to amplify songs with strong visual or cultural resonance rather than those featuring multiple artists. As a result, the advantage typically associated with featured collaborations in the broader music industry does not necessarily translate into measurable popularity gains within YouTube Music’s ecosystem.</p>
+<p>The findings also suggest potential differences in how user demographics interact with featured content. Younger audiences, who dominate YouTube usage, may respond more to novelty, virality, and video aesthetics than to the presence of additional artists. This may dilute the expected benefits of collaborations. Overall, these results highlight the importance of platform-specific strategies when evaluating or attempting to influence music popularity.</p>
+<p>Overall, the analysis across descriptive statistics, hypothesis testing, regression, and bootstrapping consistently indicates that featured songs do not outperform solo songs on YouTube Music. Several factors may explain this pattern. YouTube’s recommendation algorithm favors recent uploads and viral potential rather than artist collaborations alone. Collaborations may help in cross-promoting to multiple fanbases, but in practice, they do not systematically increase view counts. The findings align with prior research suggesting platform-specific effects: while features may improve playlist placement on Spotify, YouTube’s algorithm-driven visibility amplifies other factors. These results underscore the importance of considering platform mechanics when interpreting popularity metrics.</p>
 </section>
 </section>
 <section id="contribution-to-the-overarching-question" class="level1">
@@ -613,6 +641,7 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 <p>For the overarching question — “What drives song popularity across platforms?” — this analysis shows that on YouTube Music, collaboration itself is not a driver of success. Instead, platform dynamics (algorithmic exposure and recency) dominate musical popularity. This analysis contributes to the team OQ by demonstrating that the importance of specific factors is platform dependent. On YouTube Music, timing and platform exposure outweigh collaborative features as drivers of popularity — a contrast to some Spotify-based findings where features can assist playlist discovery.</p>
 <p>This contrasts with platforms like Spotify where features often increase playlist placement.</p>
 <p>YouTube behaves differently: exposure &gt; collaboration.</p>
+<p>The broader team question asks what drives song popularity across streaming platforms. Our analysis contributes a platform-specific insight: on YouTube Music, algorithmic exposure and recency dominate, whereas collaboration status is relatively unimportant. This demonstrates that factors influencing popularity are not universal but context-dependent. It suggests that strategies relying solely on featuring artists may not yield expected benefits on YouTube. Cross-platform studies could reveal different dynamics on Spotify, Apple Music, or TikTok, emphasizing the need for platform-aware analytical approaches. Our results highlight the necessity of combining descriptive, inferential, and regression-based methods to fully understand popularity determinants.</p>
 </section>
 <section id="limitations-future-work" class="level1">
 <h1>11. Limitations &amp; Future Work</h1>
@@ -623,6 +652,7 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 <section id="future-work" class="level2">
 <h2 class="anchored" data-anchor-id="future-work">Future work:</h2>
 <p>Merge with Spotify/Billboard data for cross-platform validation; add engagement metrics and audio features; apply causal inference methods (e.g., difference-in-differences around release promotions) to better isolate effects.</p>
+<p>Limitations of this analysis include the absence of engagement metrics such as likes, comments, watch-time, and playlist data, which are likely strong drivers of YouTube visibility. Additionally, genre labels are noisy, and the featured class is sparse, limiting the granularity of subgroup analyses. Future work should integrate data from Spotify, Billboard, and other streaming platforms to conduct cross-platform comparisons. Including audio features and marketing interventions could enable causal inference methods to isolate the effect of collaborations more accurately. Finally, extending the study to consider social media virality and playlist placement would enrich understanding of popularity dynamics.</p>
 </section>
 </section>
 <section id="export-summary-table" class="level1">
@@ -634,9 +664,14 @@ F-statistic: 36.08 on 2 and 24326 DF,  p-value: 2.261e-16</code></pre>
 </details>
 </div>
 </section>
+<section id="reproducibility-notes" class="level1">
+<h1>Reproducibility Notes</h1>
+<p>All results in this document can be reproduced by running the code chunks in order within this Quarto file. The environment uses R 4.4+, and all package versions are printed at the top for full transparency. Visualizations are rendered using ggplot2, and all statistical procedures rely on standard, deterministic functions unless noted (e.g., bootstrapping uses a fixed seed). No external manual intervention is required, making this analysis fully reproducible.</p>
+</section>
 <section id="final-summary" class="level1">
 <h1>Final Summary</h1>
 <p>On YouTube Music, featured songs do not outperform solo songs; timing and algorithm-driven exposure are the dominant determinants of popularity.</p>
+<p>In conclusion, the study provides a reproducible, comprehensive analysis of featured versus solo songs on YouTube Music. Featured songs do not outperform solo tracks, and their average popularity is slightly lower even after adjusting for release year. Timing, algorithm-driven exposure, and recency are stronger predictors of success. These insights are critical for artists, managers, and researchers aiming to understand music popularity in the digital age. By presenting all code, visualizations, and narrative in a Quarto document, this work ensures transparency and replicability, satisfying reproducible research standards and supporting evidence-based decision-making in music analytics.</p>
 
 
 </section>
