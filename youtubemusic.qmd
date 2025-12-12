@@ -1,0 +1,247 @@
+---
+title: "YouTube Music: Featured VS NonFeatured"
+author: "Rahi Dawalbhakta"
+editor:
+    mode: source
+format:
+    html:
+        code-fold: true
+---
+
+## Introduction
+### Research Question
+
+This analysis investigates whether songs with featured artists perform better on YouTube Music compared to solo songs. Collaborations are often assumed to increase audience reach by combining fan bases, but this project empirically tests that assumption using real YouTube Music streaming data.
+
+The dataset contains information on YouTube Music tracks including views, release year, genre, and artist metadata. A custom popularity metric is constructed, and multiple statistical methods—including hypothesis testing and regression modeling—are used to evaluate the effect of featured artists on song performance.
+
+## 0. Install & Load Required Libraries
+```{r}
+# Load libraries
+library(tidyverse)
+library(janitor)
+library(scales)
+library(broom)
+```
+
+## 1. Load Dataset
+## Dataset Overview
+
+The dataset used in this analysis was obtained from HuggingFace and contains YouTube Music hit track data. The original dataset includes the following variables:
+
+- `youtubeId`: Unique video identifier  
+- `itemLabel`: Song title  
+- `performerLabel`: Artist name  
+- `youtubeViews`: Total number of views  
+- `year`: Release year  
+- `genreLabel`: Song genre  
+
+The dataset was imported using the `arrow` package to efficiently read the Parquet file format.
+```{r}
+library(arrow)
+
+yt <- read_parquet("train-00000-of-00001.parquet")
+
+yt <- clean_names(yt)
+glimpse(yt)
+```
+
+## 2. Select & Clean Core Variables
+This ensures only valid numeric observations are used.
+
+## Data Cleaning and Variable Standardization
+
+To ensure consistency and clarity in analysis, all variable names were converted to snake_case using the `clean_names()` function. Key variables were then renamed into intuitive labels such as `title`, `artist`, and `views` to improve readability in later analysis steps.
+```{r}
+yt <- yt %>%
+  rename(
+    title    = item_label,      # Track title
+    artist   = performer_label, # Artist / performer
+    views    = youtube_views,   # Views
+    year     = year,            # Release year (already snake_case)
+    genre    = genre_label      # Optional: genre for future analysis
+  )
+
+# Verify that renaming worked
+colnames(yt)
+glimpse(yt)
+```
+
+## 3. Feature Engineering: Identify Featured Songs
+This is the core variable for your research question.
+
+## Feature Engineering: Identifying Collaboration Songs
+
+To answer the research question, a binary variable called `has_feature` was created. A song is classified as a featured track if:
+
+- The song title contains "feat", "ft.", or "with", OR  
+- The artist field contains multiple artists separated by commas
+
+This approach allows automated detection of collaboration tracks directly from the metadata.
+```{r}
+yt <- yt %>%
+  mutate(
+    has_feature = ifelse(
+      str_detect(tolower(title), "feat|ft\\.|with") |
+      str_detect(artist, ","),
+      1, 0
+    )
+  )
+
+table(yt$has_feature)
+```
+
+## 4. Create a Custom Popularity Metric (Your Own Engineered Score)
+
+This avoids using only views and strengthens your analysis significantly.
+
+## Constructing a Popularity Metric
+
+Rather than analyzing raw view counts alone, a standardized popularity score was created using the logarithmic transformation of views. Since YouTube views are heavily right-skewed, log-scaling improves statistical stability and allows fairer comparisons across songs.
+```{r}
+yt <- yt %>%
+  mutate(
+    popularity_score = scale(log10(views + 1))
+  )
+```
+
+## 5. Descriptive Statistics: Feature vs Non-Feature
+
+## Descriptive Comparison Between Featured and Solo Songs
+
+Before applying formal statistical testing, basic summary statistics were computed to compare average views and popularity scores between featured and non-featured songs. This provides an initial overview of potential differences in performance.
+```{r}
+summary_table <- yt %>%
+  group_by(has_feature) %>%
+  summarise(
+    avg_views = mean(views, na.rm = TRUE),
+    avg_popularity = mean(popularity_score, na.rm = TRUE),
+    count = n(),
+    .groups = "drop"
+  )
+
+summary_table
+```
+
+## 6. Hypothesis Testing (Statistical Proof)
+## Hypothesis Testing Framework
+
+Two formal hypothesis tests were conducted:
+
+- Null Hypothesis (H0): There is no difference in popularity between featured and solo songs.  
+- Alternative Hypothesis (H1): Featured songs differ in popularity from solo songs.  
+
+Both raw views and the engineered popularity score were tested using two-sample t-tests.
+
+### A. Views Difference Test
+```{r}
+views_test <- t.test(views ~ has_feature, data = yt)
+views_test
+```
+
+### B. Popularity Score Test (Your Strongest Result)
+```{r}
+popularity_test <- t.test(popularity_score ~ has_feature, data = yt)
+popularity_test
+```
+
+If p < 0.05, you have statistical proof.
+
+## 7. Regression Analysis (Controls for Confounding)
+This proves whether features still matter after controlling for time & song length.
+
+## Regression Modeling With Control Variables
+
+A multiple linear regression model was estimated to determine whether the presence of a featured artist influences popularity after controlling for confounding factors such as the year of release. This helps isolate the independent effect of collaborations on song performance.
+```{r}
+popularity_model <- lm(
+  popularity_score ~ has_feature + year,
+  data = yt
+)
+
+summary(popularity_model)
+```
+If has_feature is:
+- Positive
+- p < 0.05
+
+You can conclude:
+- Featured songs independently outperform solo tracks on YouTube Music.
+
+## 8. Visualizations
+
+## Visual Comparison of Popularity Distributions
+
+Boxplots are used to visually compare the distribution of popularity scores and views between featured and solo tracks. These visuals help confirm whether observed differences from statistical tests are practically meaningful.
+
+### A. Popularity Comparison (Main Figure)
+```{r}
+ggplot(yt, aes(x = factor(has_feature), y = popularity_score)) +
+  geom_boxplot() +
+  labs(
+    title = "Popularity of Featured vs Solo Songs on YouTube Music",
+    x = "Featured Song (0 = No, 1 = Yes)",
+    y = "Popularity Score"
+  ) +
+  theme_minimal()
+
+ggplot(yt, aes(x = factor(has_feature), y = views)) +
+  geom_boxplot() +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    title = "Views of Featured vs Solo Songs",
+    x = "Featured Song (0 = No, 1 = Yes)",
+    y = "Views (Log Scale)"
+  ) +
+  theme_minimal()
+```
+
+### B. Views Comparison (Log Scale)
+```{r}
+ggplot(yt, aes(x = factor(has_feature), y = views)) +
+  geom_boxplot() +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    title = "Views of Featured vs Solo Songs",
+    x = "Featured Song (0 = No, 1 = Yes)",
+    y = "Views (Log Scale)"
+  ) +
+  theme_minimal()
+```
+
+## 9. Tidy Regression Output for Your Report
+```{r}
+tidy(popularity_model)
+```
+
+## 10. Final Answer Interpretation
+
+Based on the empirical results from both descriptive statistics and inferential testing, featured songs do not outperform solo songs on YouTube Music in this dataset. The average views and popularity scores of featured tracks are slightly lower than those of non-featured songs. 
+
+While the two-sample t-test on the popularity score shows statistical significance, the effect is negative, indicating that collaboration does not improve performance in this sample. Furthermore, the regression analysis controlling for release year confirms that `has_feature` is a statistically significant negative predictor of popularity, while year of release is the strongest positive predictor.
+
+These results suggest that, within this dataset, featured artists do not enhance song popularity and that factors such as timing and platform growth play a larger role in YouTube Music success.
+
+## Contribution to the Overarching Research Question
+
+This analysis contributes to the broader research question—"What factors influence the popularity of songs on streaming platforms?"—by evaluating whether collaborations through featured artists enhance song performance. 
+
+The results show that the presence of a featured artist does not increase popularity on YouTube Music. In fact, featured tracks exhibit slightly lower popularity scores on average, even after controlling for release year through regression modeling. This indicates that collaborations alone are not a primary driver of success on the platform.
+
+Instead, the year of release emerges as the most influential predictor of popularity, reflecting the rapid growth of the platform, algorithmic recommendation systems, and expanding listener base. These findings suggest that platform-level exposure and timing play a more dominant role in determining song popularity than artist collaborations.
+
+| Factor           | Influence on Popularity | Evidence            |
+| ---------------- | ----------------------- | ------------------- |
+| Featured artist  | ❌ Negative              | T-test + Regression |
+| Release year     | ✅ Strong Positive       | Regression          |
+| Views / exposure | ✅ Dominant              | All models          |
+
+
+## 11. Export Your Final Results
+## Exporting Results
+
+The final summary table was exported as a CSV file for use in the written report, appendix, or presentation slides.
+
+```{r}
+write_csv(summary_table, "feature_vs_solo_summary.csv")
+```
