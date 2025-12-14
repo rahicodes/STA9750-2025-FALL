@@ -24,8 +24,6 @@ format:
 - release year  
 - exact YouTube view counts  
 
-## Dataset Used  
-**YouTube Music (HuggingFace) Dataset** — 24,000+ most-viewed YouTube Music tracks with: title, artist, genre, release year, and exact YouTube view counts.  
 **Source:** https://huggingface.co/datasets/akbargherbal/youtube-music-hits 
 
 ---
